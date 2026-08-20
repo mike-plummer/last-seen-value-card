@@ -1,6 +1,7 @@
 import type { HomeAssistant } from 'custom-card-helpers';
 
 import type { HistoryState } from '../types';
+import { type CompressedHistoryState, normalizeHistoryEntries } from '../utils/normalize-history';
 
 export async function fetchHistory(
   hass: HomeAssistant,
@@ -13,17 +14,18 @@ export async function fetchHistory(
     return historyByEntity;
   }
 
-  const response = await hass.callWS<Record<string, HistoryState[]>>({
+  const response = await hass.callWS<Record<string, CompressedHistoryState[]>>({
     type: 'history/history_during_period',
     start_time: startTime.toISOString(),
     end_time: new Date().toISOString(),
     entity_ids: entityIds,
     minimal_response: true,
     no_attributes: true,
+    include_start_time_state: true,
   });
 
   for (const entityId of entityIds) {
-    historyByEntity.set(entityId, response[entityId] ?? []);
+    historyByEntity.set(entityId, normalizeHistoryEntries(response[entityId]));
   }
 
   return historyByEntity;

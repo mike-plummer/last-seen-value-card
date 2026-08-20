@@ -4,6 +4,7 @@ A Home Assistant Lovelace custom card that displays the last known value for sen
 
 ## Requirements
 
+- Home Assistant **2026.5 or later** (visual editor uses `ha-input`; tested on **2026.8**)
 - Home Assistant with the **Recorder** integration enabled (this is on by default as a dependency of the **History** integration [also on by default])
 - Configured entities must be recorded in history (check **Settings → Devices & Services → Recorder**)
 

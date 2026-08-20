@@ -72,7 +72,7 @@ export class LastSeenValueCardEditor extends LitElement implements LovelaceCardE
           @input=${this._valueChanged}
           hint="Examples: 48h, 7d, 2w, or 168"
           .invalid=${Boolean(this._lookbackError)}
-          .errorMessage=${this._lookbackError}
+          .validationMessage=${this._lookbackError}
         ></ha-input>
         ${
           this._lookbackError
