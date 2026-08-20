@@ -1,0 +1,41 @@
+{
+  "name": "last-seen-value-card",
+  "type": "module",
+  "version": "0.1.0",
+  "description": "A Lovelace card for displaying the last-known value for a set of entities",
+  "keywords": [
+    "home-assistant",
+    "homeassistant",
+    "hass",
+    "lovelace",
+    "custom-cards"
+  ],
+  "module": "dist/last-seen-value-card.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "rollup -c rollup.config.dev.js --watch",
+    "build": "npm run lint && rollup -c",
+    "clean": "rm -rf dist",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "dependencies": {
+    "custom-card-helpers": "^2.0.0",
+    "home-assistant-js-websocket": "^9.6.0",
+    "lit": "^3.3.2"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.9",
+    "@rollup/plugin-commonjs": "^26.0.0",
+    "@rollup/plugin-json": "^6.1.0",
+    "@rollup/plugin-node-resolve": "^15.2.0",
+    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-typescript": "^11.1.0",
+    "rollup": "^4.20.0",
+    "rollup-plugin-esbuild": "^6.2.1",
+    "rollup-plugin-serve": "^1.1.1",
+    "tslib": "^2.6.0",
+    "typescript": "^5.9.3"
+  }
+}
