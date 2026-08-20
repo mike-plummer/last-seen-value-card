@@ -22,6 +22,7 @@ import {
   parseEntityConfigs,
   type ResolvedLastSeen,
 } from './types';
+import { hasTemplateSyntax } from './utils/is-template-content';
 import { resolveLastSeen } from './utils/last-seen';
 import { parseLookback } from './utils/parse-lookback';
 import { buildTemplateContext, getTemplateEntityIds } from './utils/template-context';
@@ -118,7 +119,10 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
     this._updateStartTime();
     this._setupRefreshTimer();
     this._scheduleHistoryFetch(true);
-    this._scheduleContentRender(true);
+    this._updateStaticContent();
+    if (this._needsTemplateSubscription()) {
+      this._scheduleContentRender(true);
+    }
   }
 
   public getCardSize(): number {
@@ -161,6 +165,9 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       window.clearTimeout(this.contentRenderTimer);
       this.contentRenderTimer = undefined;
     }
+    this.fetchInFlight = false;
+    this.pendingHistoryFetch = false;
+    this.historyLoading = false;
     this.contentContextKey = '';
     this._unsubscribeContent();
   }
@@ -173,11 +180,17 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       } else {
         this._maybeRefreshHistory();
       }
-      this._scheduleContentRender();
+      this._updateStaticContent();
+      if (this._needsTemplateSubscription() && !this.contentUnsubscribe) {
+        this._scheduleContentRender(true);
+      }
     }
 
     if (changed.has('resolved')) {
-      this._scheduleContentRender();
+      this._updateStaticContent();
+      if (this._needsTemplateSubscription()) {
+        this._scheduleContentRender();
+      }
     }
   }
 
@@ -350,10 +363,32 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
     void this._fetchHistory();
   }
 
+  private _needsTemplateSubscription(): boolean {
+    const content = this.config?.content;
+    return Boolean(this.config?.show_content && content && hasTemplateSyntax(content));
+  }
+
+  private _updateStaticContent(): void {
+    const content = this.config?.content;
+    if (!this.config?.show_content || !content || !this.hass || hasTemplateSyntax(content)) {
+      return;
+    }
+
+    this.contentError = undefined;
+    this.renderedContent = content;
+    this.contentContextKey = '';
+    this._unsubscribeContent();
+  }
+
   private _scheduleContentRender(immediate = false): void {
     if (!this.config?.show_content || !this.config.content || !this.hass) {
       this.contentContextKey = '';
       this._unsubscribeContent();
+      return;
+    }
+
+    if (!hasTemplateSyntax(this.config.content)) {
+      this._updateStaticContent();
       return;
     }
 
@@ -362,13 +397,16 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       return;
     }
 
-    if (this.contentRenderTimer) {
-      window.clearTimeout(this.contentRenderTimer);
-      this.contentRenderTimer = undefined;
+    if (immediate || !this.contentUnsubscribe) {
+      if (this.contentRenderTimer) {
+        window.clearTimeout(this.contentRenderTimer);
+        this.contentRenderTimer = undefined;
+      }
+      void this._subscribeContent();
+      return;
     }
 
-    if (immediate) {
-      void this._subscribeContent();
+    if (this.contentRenderTimer) {
       return;
     }
 
@@ -444,7 +482,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       await this.contentUnsubscribe;
     } catch (error) {
       this.contentError = error instanceof Error ? error.message : 'Failed to render template';
-      this.renderedContent = '';
+      this.renderedContent = content;
       this.contentUnsubscribe = undefined;
       this.contentContextKey = '';
     }
