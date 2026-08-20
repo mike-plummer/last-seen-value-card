@@ -2,6 +2,7 @@ import {
   type ActionHandlerEvent,
   computeIcon,
   computeName,
+  deepEqual,
   type HomeAssistant,
   handleAction,
   hasAction,
@@ -74,6 +75,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
   private historyByEntity = new Map<string, import('./types').HistoryState[]>();
   private startTime = new Date();
   private lastHistoryFetch = 0;
+  private initialHistoryLoaded = false;
   private refreshTimer?: number;
   private fetchInFlight = false;
   private pendingHistoryFetch = false;
@@ -102,7 +104,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
 
     parseLookback(config.lookback);
 
-    this.config = {
+    const normalized: LastSeenValueCardConfig = {
       show_last_updated: false,
       refresh_interval: DEFAULT_REFRESH_INTERVAL,
       show_entities: true,
@@ -112,19 +114,65 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       ...config,
       type: CUSTOM_CARD_TYPE,
     };
+
+    if (
+      this.config &&
+      deepEqual(this._runtimeConfig(this.config), this._runtimeConfig(normalized))
+    ) {
+      return;
+    }
+
+    const previous = this.config;
+    this.config = normalized;
     this.entityConfigs = parseEntityConfigs(this.config.entities);
-    this.resolved = {};
-    this.resolvedSignature = '';
-    this.contentContextKey = '';
-    this.contentSubscribeGeneration += 1;
-    this.lastHistoryFetch = 0;
+
+    const historyInputsChanged =
+      !previous ||
+      previous.lookback !== normalized.lookback ||
+      !deepEqual(previous.entities, normalized.entities);
+
+    const contentChanged =
+      !previous ||
+      previous.show_content !== normalized.show_content ||
+      previous.content !== normalized.content ||
+      !deepEqual(previous.content_entity_id, normalized.content_entity_id);
+
+    if (historyInputsChanged) {
+      this.historyByEntity = new Map();
+      this.resolved = {};
+      this.resolvedSignature = '';
+      this.lastHistoryFetch = 0;
+      this.initialHistoryLoaded = false;
+    }
+
+    if (contentChanged) {
+      this.contentContextKey = '';
+      this.contentSubscribeGeneration += 1;
+      this.renderedContent = '';
+      this.contentError = undefined;
+      this._unsubscribeContent();
+    }
+
     this._updateStartTime();
     this._setupRefreshTimer();
-    this._scheduleHistoryFetch(true);
+
+    if (historyInputsChanged || !this.initialHistoryLoaded) {
+      this._scheduleHistoryFetch(true);
+    } else {
+      this._resolveEntities();
+    }
+
     this._updateStaticContent();
     if (this._needsTemplateSubscription()) {
       this._scheduleContentRender(true);
     }
+  }
+
+  private _runtimeConfig(
+    config: LastSeenValueCardConfig,
+  ): Omit<LastSeenValueCardConfig, 'index' | 'view_index'> {
+    const { index: _index, view_index: _viewIndex, ...runtime } = config;
+    return runtime;
   }
 
   public getCardSize(): number {
@@ -178,7 +226,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
   protected updated(changed: PropertyValues): void {
     if (changed.has('hass') && this.hass) {
       this._resolveEntities();
-      if (this.lastHistoryFetch === 0) {
+      if (!this.initialHistoryLoaded) {
         this._scheduleHistoryFetch(true);
       } else {
         this._maybeRefreshHistory();
@@ -481,6 +529,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
             }
             this.contentError = undefined;
             this.renderedContent = result;
+            this.requestUpdate();
           },
           onError: (error) => {
             if (generation !== this.contentSubscribeGeneration) {
@@ -488,6 +537,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
             }
             this.contentError = error;
             this.renderedContent = '';
+            this.requestUpdate();
           },
         },
         entityIds,
@@ -513,7 +563,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       return;
     }
 
-    const isInitialLoad = this.lastHistoryFetch === 0;
+    const isInitialLoad = !this.initialHistoryLoaded;
     this.fetchInFlight = true;
     if (isInitialLoad) {
       this.historyLoading = true;
@@ -529,9 +579,8 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
     } finally {
       this.fetchInFlight = false;
       this.historyLoading = false;
-      if (this.lastHistoryFetch === 0) {
-        this.lastHistoryFetch = Date.now();
-      }
+      this.initialHistoryLoaded = true;
+      this.lastHistoryFetch = Date.now();
       this._resolveEntities();
 
       if (this._needsTemplateSubscription()) {
@@ -567,7 +616,8 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
     }
 
     this.resolvedSignature = signature;
-    this.resolved = { ...next };
+    this.resolved = next;
+    this.requestUpdate();
   }
 
   static get styles() {
