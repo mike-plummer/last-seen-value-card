@@ -65,7 +65,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
 
   @state() private config!: LastSeenValueCardConfig;
   @state() private entityConfigs: EntityConfig[] = [];
-  @state() private resolved = new Map<string, ResolvedLastSeen>();
+  @state() private resolved: Record<string, ResolvedLastSeen> = {};
   @state() private historyError?: string;
   @state() private historyLoading = false;
   @state() private renderedContent = '';
@@ -80,6 +80,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
   private contentRenderTimer?: number;
   private contentUnsubscribe?: Promise<() => Promise<void>>;
   private contentContextKey = '';
+  private contentSubscribeGeneration = 0;
   private resolvedSignature = '';
 
   public setConfig(config: LastSeenValueCardConfig): void {
@@ -112,9 +113,10 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       type: CUSTOM_CARD_TYPE,
     };
     this.entityConfigs = parseEntityConfigs(this.config.entities);
-    this.resolved = new Map();
+    this.resolved = {};
     this.resolvedSignature = '';
     this.contentContextKey = '';
+    this.contentSubscribeGeneration += 1;
     this.lastHistoryFetch = 0;
     this._updateStartTime();
     this._setupRefreshTimer();
@@ -169,6 +171,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
     this.pendingHistoryFetch = false;
     this.historyLoading = false;
     this.contentContextKey = '';
+    this.contentSubscribeGeneration += 1;
     this._unsubscribeContent();
   }
 
@@ -181,7 +184,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
         this._maybeRefreshHistory();
       }
       this._updateStaticContent();
-      if (this._needsTemplateSubscription() && !this.contentUnsubscribe) {
+      if (this._needsTemplateSubscription()) {
         this._scheduleContentRender(true);
       }
     }
@@ -243,7 +246,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
 
   private _renderEntityRow(entityConfig: EntityConfig): TemplateResult {
     const entityId = entityConfig.entity;
-    const resolved = this.resolved.get(entityId) ?? { available: false };
+    const resolved = this.resolved[entityId] ?? { available: false };
     const stateObj = this.hass.states[entityId];
     const name = entityConfig.name ?? (stateObj ? computeName(stateObj) : entityId);
     const icon = entityConfig.icon ?? (stateObj ? computeIcon(stateObj) : 'mdi:help-circle');
@@ -383,6 +386,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
   private _scheduleContentRender(immediate = false): void {
     if (!this.config?.show_content || !this.config.content || !this.hass) {
       this.contentContextKey = '';
+      this.contentSubscribeGeneration += 1;
       this._unsubscribeContent();
       return;
     }
@@ -397,22 +401,19 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       return;
     }
 
-    if (immediate || !this.contentUnsubscribe) {
-      if (this.contentRenderTimer) {
-        window.clearTimeout(this.contentRenderTimer);
-        this.contentRenderTimer = undefined;
-      }
-      void this._subscribeContent();
-      return;
+    if (this.contentRenderTimer) {
+      window.clearTimeout(this.contentRenderTimer);
+      this.contentRenderTimer = undefined;
     }
 
-    if (this.contentRenderTimer) {
+    if (immediate) {
+      void this._connectTemplate();
       return;
     }
 
     this.contentRenderTimer = window.setTimeout(() => {
       this.contentRenderTimer = undefined;
-      void this._subscribeContent();
+      void this._connectTemplate();
     }, CONTENT_RENDER_DEBOUNCE_MS);
   }
 
@@ -430,8 +431,8 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
     return `${this.config.content ?? ''}|${entityIds}|${this.resolvedSignature}`;
   }
 
-  private _computeResolvedSignature(resolved: Map<string, ResolvedLastSeen>): string {
-    return [...resolved.entries()]
+  private _computeResolvedSignature(resolved: Record<string, ResolvedLastSeen>): string {
+    return Object.entries(resolved)
       .map(([entityId, value]) =>
         value.available
           ? `${entityId}:${value.state}:${value.lastChanged.getTime()}`
@@ -440,8 +441,12 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       .join('|');
   }
 
-  private async _subscribeContent(): Promise<void> {
+  private async _connectTemplate(): Promise<void> {
     if (!this.config?.show_content || !this.config.content || !this.hass) {
+      return;
+    }
+
+    if (!hasTemplateSyntax(this.config.content)) {
       return;
     }
 
@@ -450,8 +455,8 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       return;
     }
 
+    const generation = ++this.contentSubscribeGeneration;
     this._unsubscribeContent();
-    this.contentContextKey = contextKey;
 
     const variables = buildTemplateContext(
       this.hass,
@@ -459,7 +464,9 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       this.entityConfigs,
       this.resolved,
     );
-    const entityIds = getTemplateEntityIds(this.config, this.entityConfigs);
+    const entityIds = this.config.content_entity_id
+      ? getTemplateEntityIds(this.config, this.entityConfigs)
+      : undefined;
     const content = this.config.content;
 
     try {
@@ -469,10 +476,16 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
         variables,
         {
           onResult: (result) => {
+            if (generation !== this.contentSubscribeGeneration) {
+              return;
+            }
             this.contentError = undefined;
             this.renderedContent = result;
           },
           onError: (error) => {
+            if (generation !== this.contentSubscribeGeneration) {
+              return;
+            }
             this.contentError = error;
             this.renderedContent = '';
           },
@@ -480,9 +493,16 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
         entityIds,
       );
       await this.contentUnsubscribe;
+      if (generation !== this.contentSubscribeGeneration) {
+        return;
+      }
+      this.contentContextKey = contextKey;
     } catch (error) {
+      if (generation !== this.contentSubscribeGeneration) {
+        return;
+      }
       this.contentError = error instanceof Error ? error.message : 'Failed to render template';
-      this.renderedContent = content;
+      this.renderedContent = '';
       this.contentUnsubscribe = undefined;
       this.contentContextKey = '';
     }
@@ -514,6 +534,10 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       }
       this._resolveEntities();
 
+      if (this._needsTemplateSubscription()) {
+        this._scheduleContentRender(true);
+      }
+
       if (this.pendingHistoryFetch) {
         this.pendingHistoryFetch = false;
         void this._fetchHistory();
@@ -526,12 +550,14 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       return;
     }
 
-    const next = new Map<string, ResolvedLastSeen>();
+    const next: Record<string, ResolvedLastSeen> = {};
     for (const entityConfig of this.entityConfigs) {
       const entityId = entityConfig.entity;
-      next.set(
+      next[entityId] = resolveLastSeen(
+        this.hass,
         entityId,
-        resolveLastSeen(this.hass, entityId, this.historyByEntity.get(entityId), this.startTime),
+        this.historyByEntity.get(entityId),
+        this.startTime,
       );
     }
 
@@ -541,7 +567,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
     }
 
     this.resolvedSignature = signature;
-    this.resolved = next;
+    this.resolved = { ...next };
   }
 
   static get styles() {

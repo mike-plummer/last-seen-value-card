@@ -34,9 +34,9 @@ export function subscribeTemplateContent(
       type: 'render_template',
       template: content,
       variables,
-      entity_ids: entityIds,
       strict: true,
       report_errors: true,
+      ...(entityIds?.length ? { entity_ids: entityIds } : {}),
     },
   );
 }

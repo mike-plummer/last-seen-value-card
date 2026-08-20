@@ -48,7 +48,7 @@ function resolveFromHistory(
     }
 
     const lastChanged = new Date(entry.last_changed);
-    if (lastChanged < startTime) {
+    if (Number.isNaN(lastChanged.getTime()) || lastChanged < startTime) {
       break;
     }
 

@@ -48,7 +48,7 @@ export function buildTemplateContext(
   hass: HomeAssistant,
   config: LastSeenValueCardConfig,
   entityConfigs: EntityConfig[],
-  resolved: Map<string, ResolvedLastSeen>,
+  resolved: Record<string, ResolvedLastSeen>,
 ): TemplateContextVariables {
   const last_seen: Record<string, LastSeenTemplateEntity> = {};
   const last_seen_list: LastSeenTemplateEntity[] = [];
@@ -57,7 +57,7 @@ export function buildTemplateContext(
     const entry = buildTemplateEntity(
       hass,
       entityConfig,
-      resolved.get(entityConfig.entity) ?? { available: false },
+      resolved[entityConfig.entity] ?? { available: false },
     );
     last_seen[entityConfig.entity] = entry;
     last_seen_list.push(entry);
