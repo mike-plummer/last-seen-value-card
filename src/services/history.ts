@@ -13,17 +13,18 @@ export async function fetchHistory(
     return historyByEntity;
   }
 
-  const startISO = startTime.toISOString();
-  const path =
-    `history/period/${encodeURIComponent(startISO)}` +
-    `?filter_entity_id=${encodeURIComponent(entityIds.join(','))}` +
-    `&minimal_response&no_attributes`;
-
-  const response = await hass.callApi<HistoryState[][]>('GET', path);
-
-  entityIds.forEach((entityId, index) => {
-    historyByEntity.set(entityId, response[index] ?? []);
+  const response = await hass.callWS<Record<string, HistoryState[]>>({
+    type: 'history/history_during_period',
+    start_time: startTime.toISOString(),
+    end_time: new Date().toISOString(),
+    entity_ids: entityIds,
+    minimal_response: true,
+    no_attributes: true,
   });
+
+  for (const entityId of entityIds) {
+    historyByEntity.set(entityId, response[entityId] ?? []);
+  }
 
   return historyByEntity;
 }

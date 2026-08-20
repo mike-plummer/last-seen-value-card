@@ -13,9 +13,9 @@ import { css, html, LitElement, nothing, type PropertyValues, type TemplateResul
 import { customElement, property, state } from 'lit/decorators.js';
 
 import { actionHandler } from './action-handler-directive';
-import { CARD_TYPE, CARD_VERSION, DEFAULT_REFRESH_INTERVAL } from './const';
+import { CARD_TYPE, CARD_VERSION, CUSTOM_CARD_TYPE, DEFAULT_REFRESH_INTERVAL } from './const';
 import { fetchHistory } from './services/history';
-import { renderCardContent } from './services/template';
+import { subscribeTemplateContent } from './services/template';
 import {
   type EntityConfig,
   type LastSeenValueCardConfig,
@@ -66,7 +66,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
   @state() private entityConfigs: EntityConfig[] = [];
   @state() private resolved = new Map<string, ResolvedLastSeen>();
   @state() private historyError?: string;
-  @state() private loading = false;
+  @state() private historyLoading = false;
   @state() private renderedContent = '';
   @state() private contentError?: string;
 
@@ -74,9 +74,10 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
   private startTime = new Date();
   private lastHistoryFetch = 0;
   private refreshTimer?: number;
-  private fetchPromise?: Promise<void>;
+  private fetchInFlight = false;
+  private pendingHistoryFetch = false;
   private contentRenderTimer?: number;
-  private contentRenderGeneration = 0;
+  private contentUnsubscribe?: Promise<() => Promise<void>>;
 
   public setConfig(config: LastSeenValueCardConfig): void {
     if (!config?.entities?.length) {
@@ -105,7 +106,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       show_empty: true,
       text_only: false,
       ...config,
-      type: CARD_TYPE,
+      type: CUSTOM_CARD_TYPE,
     };
     this.entityConfigs = parseEntityConfigs(this.config.entities);
     this._updateStartTime();
@@ -154,7 +155,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       window.clearTimeout(this.contentRenderTimer);
       this.contentRenderTimer = undefined;
     }
-    this.contentRenderGeneration += 1;
+    this._unsubscribeContent();
   }
 
   protected updated(changed: PropertyValues): void {
@@ -198,11 +199,7 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       }
       ${this.historyError ? html`<div class="error">${this.historyError}</div>` : nothing}
       ${this.contentError ? html`<div class="error">${this.contentError}</div>` : nothing}
-      ${
-        this.loading && this.resolved.size === 0
-          ? html`<div class="loading">Loading history...</div>`
-          : nothing
-      }
+      ${this.historyLoading ? html`<div class="loading">Loading history...</div>` : nothing}
       ${
         showContent && !hideEmptyContent
           ? html`
@@ -336,19 +333,19 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       return;
     }
 
-    if (this.fetchPromise && !force) {
+    if (this.fetchInFlight) {
+      if (force) {
+        this.pendingHistoryFetch = true;
+      }
       return;
     }
 
-    this.fetchPromise = this._fetchHistory()
-      .catch(() => undefined)
-      .finally(() => {
-        this.fetchPromise = undefined;
-      });
+    void this._fetchHistory();
   }
 
   private _scheduleContentRender(immediate = false): void {
     if (!this.config?.show_content || !this.config.content || !this.hass) {
+      this._unsubscribeContent();
       return;
     }
 
@@ -358,22 +355,32 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
     }
 
     if (immediate) {
-      void this._renderContent();
+      void this._subscribeContent();
       return;
     }
 
     this.contentRenderTimer = window.setTimeout(() => {
       this.contentRenderTimer = undefined;
-      void this._renderContent();
+      void this._subscribeContent();
     }, CONTENT_RENDER_DEBOUNCE_MS);
   }
 
-  private async _renderContent(): Promise<void> {
+  private _unsubscribeContent(): void {
+    if (!this.contentUnsubscribe) {
+      return;
+    }
+
+    void this.contentUnsubscribe.then((unsub) => unsub()).catch(() => undefined);
+    this.contentUnsubscribe = undefined;
+  }
+
+  private async _subscribeContent(): Promise<void> {
     if (!this.config?.show_content || !this.config.content || !this.hass) {
       return;
     }
 
-    const generation = ++this.contentRenderGeneration;
+    this._unsubscribeContent();
+
     const variables = buildTemplateContext(
       this.hass,
       this.config,
@@ -381,19 +388,31 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       this.resolved,
     );
     const entityIds = getTemplateEntityIds(this.config, this.entityConfigs);
-    const response = await renderCardContent(this.hass, this.config.content, variables, entityIds);
+    const content = this.config.content;
 
-    if (generation !== this.contentRenderGeneration) {
-      return;
+    try {
+      this.contentUnsubscribe = subscribeTemplateContent(
+        this.hass,
+        content,
+        variables,
+        {
+          onResult: (result) => {
+            this.contentError = undefined;
+            this.renderedContent = result;
+          },
+          onError: (error) => {
+            this.contentError = error;
+            this.renderedContent = '';
+          },
+        },
+        entityIds,
+      );
+      await this.contentUnsubscribe;
+    } catch (error) {
+      this.contentError = error instanceof Error ? error.message : 'Failed to render template';
+      this.renderedContent = '';
+      this.contentUnsubscribe = undefined;
     }
-
-    if (response.error) {
-      this.contentError = response.error;
-      return;
-    }
-
-    this.contentError = undefined;
-    this.renderedContent = response.result ?? '';
   }
 
   private async _fetchHistory(): Promise<void> {
@@ -401,7 +420,8 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
       return;
     }
 
-    this.loading = true;
+    this.fetchInFlight = true;
+    this.historyLoading = true;
     this._updateStartTime();
 
     try {
@@ -412,8 +432,14 @@ export class LastSeenValueCard extends LitElement implements LovelaceCard {
     } catch (error) {
       this.historyError = error instanceof Error ? error.message : 'Failed to load entity history.';
     } finally {
-      this.loading = false;
+      this.fetchInFlight = false;
+      this.historyLoading = false;
       this._resolveEntities();
+
+      if (this.pendingHistoryFetch) {
+        this.pendingHistoryFetch = false;
+        void this._fetchHistory();
+      }
     }
   }
 

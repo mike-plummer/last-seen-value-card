@@ -5,8 +5,8 @@ import type { HistoryState, LastSeenResult, ResolvedLastSeen } from '../types';
 
 const INVALID_STATES = new Set(['unavailable', 'unknown', '']);
 
-export function isPopulatedState(state: string | undefined): boolean {
-  if (state === undefined) {
+export function isPopulatedState(state: string | null | undefined): boolean {
+  if (state === undefined || state === null) {
     return false;
   }
   return !INVALID_STATES.has(state.trim().toLowerCase());
@@ -43,6 +43,10 @@ function resolveFromHistory(
 
   for (let index = history.length - 1; index >= 0; index -= 1) {
     const entry = history[index];
+    if (entry.state === undefined || entry.state === null) {
+      continue;
+    }
+
     const lastChanged = new Date(entry.last_changed);
     if (lastChanged < startTime) {
       break;

@@ -7,7 +7,7 @@ import {
 import { css, html, LitElement, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 
-import { CARD_TYPE, DEFAULT_REFRESH_INTERVAL } from './const';
+import { CUSTOM_CARD_TYPE, DEFAULT_REFRESH_INTERVAL } from './const';
 import { type EntityConfig, type LastSeenValueCardConfig, parseEntityConfigs } from './types';
 import { describeLookback, parseLookback } from './utils/parse-lookback';
 
@@ -25,7 +25,7 @@ export class LastSeenValueCardEditor extends LitElement implements LovelaceCardE
     const cloned = structuredClone(config);
     this._config = {
       ...cloned,
-      type: CARD_TYPE,
+      type: CUSTOM_CARD_TYPE,
       entities: cloned.entities ?? [],
       show_last_updated: cloned.show_last_updated ?? false,
       refresh_interval: cloned.refresh_interval ?? DEFAULT_REFRESH_INTERVAL,
@@ -59,21 +59,21 @@ export class LastSeenValueCardEditor extends LitElement implements LovelaceCardE
     return html`
       <div class="section">
         <div class="section-title">General</div>
-        <ha-textfield
+        <ha-input
           label="Title (optional)"
           .value=${this._config?.title ?? ''}
           .configValue=${'title'}
           @input=${this._valueChanged}
-        ></ha-textfield>
-        <ha-textfield
+        ></ha-input>
+        <ha-input
           label="Lookback"
           .value=${this._config?.lookback ?? '7d'}
           .configValue=${'lookback'}
           @input=${this._valueChanged}
-          helper="Examples: 48h, 7d, 2w, or 168"
-          .error=${Boolean(this._lookbackError)}
+          hint="Examples: 48h, 7d, 2w, or 168"
           .invalid=${Boolean(this._lookbackError)}
-        ></ha-textfield>
+          .errorMessage=${this._lookbackError}
+        ></ha-input>
         ${
           this._lookbackError
             ? html`<div class="field-error">${this._lookbackError}</div>`
@@ -88,15 +88,15 @@ export class LastSeenValueCardEditor extends LitElement implements LovelaceCardE
             @change=${this._valueChanged}
           ></ha-switch>
         </ha-formfield>
-        <ha-textfield
+        <ha-input
           label="Refresh interval (seconds)"
           type="number"
           min="0"
           .value=${String(this._config?.refresh_interval ?? DEFAULT_REFRESH_INTERVAL)}
           .configValue=${'refresh_interval'}
           @input=${this._valueChanged}
-          helper="How often to reload history. Use 0 to refresh only on config changes."
-        ></ha-textfield>
+          hint="How often to reload history. Use 0 to refresh only on config changes."
+        ></ha-input>
       </div>
     `;
   }
@@ -137,21 +137,21 @@ export class LastSeenValueCardEditor extends LitElement implements LovelaceCardE
                 Use <code>last_seen</code> or <code>last_seen_list</code> for history-resolved values.
                 Example: {{ last_seen['sensor.example'].state }}
               </div>
-              <ha-textfield
+              <ha-input
                 label="Content entity IDs (optional, comma-separated)"
                 .value=${this._formatContentEntityIds()}
                 .configValue=${'content_entity_id'}
                 @input=${this._contentEntityIdsChanged}
-                helper="Limit which entities trigger template re-renders."
-              ></ha-textfield>
-              <ha-textfield
+                hint="Limit which entities trigger template re-renders."
+              ></ha-input>
+              <ha-input
                 label="Card size (optional)"
                 type="number"
                 min="0"
                 .value=${this._config?.card_size !== undefined ? String(this._config.card_size) : ''}
                 .configValue=${'card_size'}
                 @input=${this._valueChanged}
-              ></ha-textfield>
+              ></ha-input>
               <ha-formfield label="Show empty content">
                 <ha-switch
                   .checked=${this._config?.show_empty ?? true}
@@ -289,18 +289,18 @@ export class LastSeenValueCardEditor extends LitElement implements LovelaceCardE
           expanded
             ? html`
               <div class="entity-body">
-                <ha-textfield
+                <ha-input
                   label="Entity"
                   .value=${entityConfig.entity}
                   disabled
-                ></ha-textfield>
-                <ha-textfield
+                ></ha-input>
+                <ha-input
                   label="Name override"
                   .value=${entityConfig.name ?? ''}
                   .entityIndex=${index}
                   .configValue=${'name'}
                   @input=${this._entityValueChanged}
-                ></ha-textfield>
+                ></ha-input>
                 <ha-icon-picker
                   label="Icon override"
                   .value=${entityConfig.icon ?? ''}
@@ -430,10 +430,14 @@ export class LastSeenValueCardEditor extends LitElement implements LovelaceCardE
     }
 
     if (key === 'lookback') {
+      this._config = { ...this._config, lookback: String(value) };
       this._updateLookbackPreview(String(value));
       if (this._lookbackError) {
+        this.requestUpdate();
         return;
       }
+      this._emitConfigChanged();
+      return;
     }
 
     if (value === '' && key !== 'lookback' && key !== 'content') {
@@ -520,7 +524,9 @@ export class LastSeenValueCardEditor extends LitElement implements LovelaceCardE
     if (!this._config) {
       return;
     }
-    fireEvent(this, 'config-changed', { config: this._config });
+    fireEvent(this, 'config-changed', {
+      config: { ...this._config, type: CUSTOM_CARD_TYPE },
+    });
     this.requestUpdate();
   }
 
@@ -541,7 +547,7 @@ export class LastSeenValueCardEditor extends LitElement implements LovelaceCardE
         color: var(--primary-text-color);
       }
 
-      ha-textfield,
+      ha-input,
       ha-formfield,
       ha-entity-picker,
       ha-icon-picker {
